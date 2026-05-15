@@ -1,0 +1,60 @@
+services:
+  # Base de Datos para Zabbix
+  zabbix-db:
+    image: mysql:8.0
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_bin --log-bin-trust-function-creators=1
+    environment:
+      - MYSQL_DATABASE=zabbix
+      - MYSQL_USER=zabbix
+      - MYSQL_PASSWORD=zabbix_password
+      - MYSQL_ROOT_PASSWORD=root_password
+    networks:
+      - monitor-net
+
+  # Servidor Zabbix
+  zabbix-server:
+    image: zabbix/zabbix-server-mysql:ubuntu-7.0-latest
+    depends_on:
+      - zabbix-db
+    environment:
+      - DB_SERVER_HOST=zabbix-db
+      - MYSQL_USER=zabbix
+      - MYSQL_PASSWORD=zabbix_password
+    ports:
+      - "10051:10051"
+    networks:
+      - monitor-net
+
+  # Interfaz Web de Zabbix
+  zabbix-web:
+    image: zabbix/zabbix-web-apache-mysql:ubuntu-7.0-latest
+    depends_on:
+      - zabbix-server
+    ports:
+      - "8080:8080"
+    environment:
+      - ZBX_SERVER_HOST=zabbix-server
+      - DB_SERVER_HOST=zabbix-db
+      - MYSQL_USER=zabbix
+      - MYSQL_PASSWORD=zabbix_password
+    networks:
+      - monitor-net
+
+  # TU CEREBRO (Python + Ansible)
+  automation-engine:
+    build: ./automation-brain
+    depends_on:
+      - zabbix-server
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./automation-brain:/app
+    networks:
+      - monitor-net
+
+networks:
+  monitor-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.50.0.0/16

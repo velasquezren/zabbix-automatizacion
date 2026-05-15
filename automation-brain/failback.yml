@@ -1,0 +1,12 @@
+---
+- name: Proceso de Failback - Restaurar Ruta Principal
+  hosts: router1
+  gather_facts: no
+  tasks:
+    - name: Restaurar ruta principal y eliminar ruta de respaldo
+      cisco.ios.ios_config:
+        lines:
+          # Elimina ruta de respaldo
+          - no ip route 0.0.0.0 0.0.0.0 10.0.2.2
+          # Restaura ruta principal
+          - ip route 0.0.0.0 0.0.0.0 10.0.1.2
