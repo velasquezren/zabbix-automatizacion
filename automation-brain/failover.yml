@@ -1,12 +1,59 @@
 ---
-- name: Proceso de Failover Automático
+# ============================================================
+#  FAILOVER: Cambiar a enlace de respaldo
+#  Se ejecuta cuando Zabbix detecta caída del enlace principal
+# ============================================================
+- name: "FAILOVER — Cambiar a ruta de respaldo"
   hosts: router1
   gather_facts: no
+  connection: network_cli
+
+  vars:
+    primary_gw: "{{ primary_gateway | default('10.0.1.2') }}"
+    backup_gw: "{{ backup_gateway | default('10.0.2.2') }}"
+
   tasks:
-    - name: Cambiar ruta hacia el enlace de respaldo
+    - name: "Mostrar estado actual de rutas"
+      cisco.ios.ios_command:
+        commands:
+          - show ip route static
+      register: rutas_antes
+      tags: [verify]
+
+    - name: "INFO — Rutas antes del cambio"
+      debug:
+        msg: "{{ rutas_antes.stdout_lines }}"
+      tags: [verify]
+
+    - name: "Eliminar ruta principal y añadir ruta de respaldo"
       cisco.ios.ios_config:
         lines:
-          # Elimina ruta principal (asumiendo IP 10.0.1.2)
-          - no ip route 0.0.0.0 0.0.0.0 10.0.1.2 
-          # Añade ruta respaldo (asumiendo IP 10.0.2.2)
-          - ip route 0.0.0.0 0.0.0.0 10.0.2.2
+          - "no ip route 0.0.0.0 0.0.0.0 {{ primary_gw }}"
+          - "ip route 0.0.0.0 0.0.0.0 {{ backup_gw }}"
+        save_when: modified
+      tags: [failover]
+
+    - name: "Verificar nuevas rutas"
+      cisco.ios.ios_command:
+        commands:
+          - show ip route static
+      register: rutas_despues
+      tags: [verify]
+
+    - name: "INFO — Rutas después del cambio"
+      debug:
+        msg: "{{ rutas_despues.stdout_lines }}"
+      tags: [verify]
+
+    - name: "Verificar conectividad por enlace de respaldo"
+      cisco.ios.ios_command:
+        commands:
+          - "ping {{ backup_gw }} repeat 3"
+      register: ping_result
+      ignore_errors: yes
+      tags: [verify]
+
+    - name: "Resultado del ping de verificación"
+      debug:
+        msg: "{{ ping_result.stdout_lines }}"
+      tags: [verify]

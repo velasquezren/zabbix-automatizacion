@@ -1,0 +1,18 @@
+# Variables de entorno con contraseñas
+.env
+
+# Datos persistentes
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

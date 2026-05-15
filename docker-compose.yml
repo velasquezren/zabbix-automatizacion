@@ -1,60 +1,159 @@
 services:
-  # Base de Datos para Zabbix
+  # ============================================================
+  #  Base de Datos MySQL para Zabbix
+  # ============================================================
   zabbix-db:
     image: mysql:8.0
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_bin --log-bin-trust-function-creators=1
+    container_name: zabbix-db
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_bin
+      --log-bin-trust-function-creators=1
+      --default-authentication-plugin=mysql_native_password
     environment:
-      - MYSQL_DATABASE=zabbix
-      - MYSQL_USER=zabbix
-      - MYSQL_PASSWORD=zabbix_password
-      - MYSQL_ROOT_PASSWORD=root_password
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - zabbix-db-data:/var/lib/mysql
     networks:
       - monitor-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
-  # Servidor Zabbix
+  # ============================================================
+  #  Servidor Zabbix (Backend)
+  # ============================================================
   zabbix-server:
     image: zabbix/zabbix-server-mysql:ubuntu-7.0-latest
+    container_name: zabbix-server
     depends_on:
-      - zabbix-db
+      zabbix-db:
+        condition: service_healthy
     environment:
-      - DB_SERVER_HOST=zabbix-db
-      - MYSQL_USER=zabbix
-      - MYSQL_PASSWORD=zabbix_password
+      - DB_SERVER_HOST=${DB_SERVER_HOST}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - ZBX_STARTPOLLERS=5
+      - ZBX_STARTPINGERS=3
+      - ZBX_STARTTRAPPERS=2
     ports:
       - "10051:10051"
+    volumes:
+      - zabbix-server-data:/var/lib/zabbix
+      - ./zabbix-config/alertscripts:/usr/lib/zabbix/alertscripts
+    cap_add:
+      - NET_ADMIN
     networks:
       - monitor-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "zabbix_server", "-R", "diaginfo=historycache"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
-  # Interfaz Web de Zabbix
+  # ============================================================
+  #  Interfaz Web de Zabbix (Frontend)
+  # ============================================================
   zabbix-web:
     image: zabbix/zabbix-web-apache-mysql:ubuntu-7.0-latest
+    container_name: zabbix-web
     depends_on:
-      - zabbix-server
+      zabbix-server:
+        condition: service_healthy
     ports:
-      - "8080:8080"
+      - "${ZABBIX_WEB_PORT:-8080}:8080"
+    environment:
+      - ZBX_SERVER_HOST=${ZBX_SERVER_HOST}
+      - DB_SERVER_HOST=${DB_SERVER_HOST}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - PHP_TZ=America/La_Paz
+    networks:
+      - monitor-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  # ============================================================
+  #  Zabbix Agent (Monitoreo del propio host Docker)
+  # ============================================================
+  zabbix-agent:
+    image: zabbix/zabbix-agent:ubuntu-7.0-latest
+    container_name: zabbix-agent
+    depends_on:
+      zabbix-server:
+        condition: service_healthy
     environment:
       - ZBX_SERVER_HOST=zabbix-server
-      - DB_SERVER_HOST=zabbix-db
-      - MYSQL_USER=zabbix
-      - MYSQL_PASSWORD=zabbix_password
+      - ZBX_HOSTNAME=Docker-Host
     networks:
       - monitor-net
+    restart: unless-stopped
 
-  # TU CEREBRO (Python + Ansible)
+  # ============================================================
+  #  Motor de Automatización (Python + Ansible)
+  # ============================================================
   automation-engine:
     build: ./automation-brain
+    container_name: automation-engine
     depends_on:
-      - zabbix-server
+      zabbix-server:
+        condition: service_healthy
     environment:
       - PYTHONUNBUFFERED=1
+      - ZABBIX_URL=${ZABBIX_URL}
+      - ZABBIX_USER=${ZABBIX_USER}
+      - ZABBIX_PASSWORD=${ZABBIX_PASSWORD}
+      - POLL_INTERVAL=${POLL_INTERVAL:-10}
+      - FAILOVER_COOLDOWN=${FAILOVER_COOLDOWN:-30}
+      - STATE_FILE=${STATE_FILE:-/app/data/engine_state.json}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ROUTER_IP=${ROUTER_IP}
+      - ROUTER_USER=${ROUTER_USER}
+      - ROUTER_PASSWORD=${ROUTER_PASSWORD}
+      - PRIMARY_GATEWAY=${PRIMARY_GATEWAY}
+      - BACKUP_GATEWAY=${BACKUP_GATEWAY}
     volumes:
       - ./automation-brain:/app
+      - engine-data:/app/data
+    ports:
+      - "8000:8000"
     networks:
       - monitor-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
 
 networks:
   monitor-net:
     driver: bridge
     ipam:
       config:
-        - subnet: 10.50.0.0/16
+        - subnet: ${MONITOR_SUBNET:-10.50.0.0/16}
+
+volumes:
+  zabbix-db-data:
+    driver: local
+  zabbix-server-data:
+    driver: local
+  engine-data:
+    driver: local
