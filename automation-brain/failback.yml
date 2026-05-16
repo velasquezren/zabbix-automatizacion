@@ -30,7 +30,16 @@
         lines:
           - "no ip route 0.0.0.0 0.0.0.0 {{ backup_gw }}"
           - "ip route 0.0.0.0 0.0.0.0 {{ primary_gw }}"
-        save_when: modified
+        save_when: never
+      tags: [failback]
+
+    - name: "Guardar configuración en NVRAM"
+      cisco.ios.ios_command:
+        commands:
+          - command: "write memory"
+            prompt: "\\[confirm\\]"
+            answer: "\r"
+      ignore_errors: yes
       tags: [failback]
 
     - name: "Verificar nuevas rutas"

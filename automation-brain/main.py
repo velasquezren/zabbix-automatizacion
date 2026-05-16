@@ -181,7 +181,7 @@ class EngineState:
 def generar_inventario():
     """Genera el inventario Ansible con datos del entorno."""
     contenido = f"""[router1]
-{Config.ROUTER_IP} ansible_user={Config.ROUTER_USER} ansible_password={Config.ROUTER_PASSWORD} ansible_network_os=ios ansible_connection=network_cli ansible_ssh_common_args='-c aes256-cbc -o KexAlgorithms=+diffie-hellman-group14-sha1 -o HostKeyAlgorithms=+ssh-rsa -o StrictHostKeyChecking=no'
+{Config.ROUTER_IP} ansible_user={Config.ROUTER_USER} ansible_password={Config.ROUTER_PASSWORD} ansible_network_os=ios ansible_connection=network_cli ansible_command_timeout=60 ansible_ssh_common_args='-c aes256-cbc -o KexAlgorithms=+diffie-hellman-group14-sha1 -o HostKeyAlgorithms=+ssh-rsa -o StrictHostKeyChecking=no'
 
 [router1:vars]
 primary_gateway={Config.PRIMARY_GATEWAY}

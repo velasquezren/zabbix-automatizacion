@@ -365,3 +365,6 @@ Enlace principal restaurado — Iniciando FAILBACK
 ---
 
 **Universidad Autónoma Gabriel René Moreno — Redes de Computadoras**
+
+
+show ip route static

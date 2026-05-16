@@ -101,7 +101,7 @@ services:
         condition: service_healthy
     environment:
       - ZBX_SERVER_HOST=zabbix-server
-      - ZBX_HOSTNAME=Docker-Host
+      - ZBX_HOSTNAME=Zabbix-server
     networks:
       - monitor-net
     restart: unless-stopped
