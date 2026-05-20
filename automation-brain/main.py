@@ -281,12 +281,148 @@ def conectar_zabbix(max_retries: int = 5) -> ZabbixAPI:
             return zapi
         except Exception as e:
             wait = min(2 ** intento, 60)
-            log.warning(f"Intento {intento}/{max_retries} fallido: {e}")
+            log.warning(f"Intento {intento}/{max_retries} fallido al conectar a Zabbix: {e}")
             log.warning(f"Reintentando en {wait}s...")
             time.sleep(wait)
 
     log.error("No se pudo conectar a Zabbix después de todos los reintentos")
     return None
+
+
+# ============================================================
+#  Auto-configuración (Bootstrap) de Zabbix
+# ============================================================
+def bootstrap_zabbix(zapi: ZabbixAPI) -> bool:
+    """Configura automáticamente Zabbix: host groups, templates, hosts y actions."""
+    log.info("⚙ Iniciando auto-configuración de Zabbix...")
+    try:
+        # 1. Crear Host Group "GNS3 Routers"
+        group_name = "GNS3 Routers"
+        grupos = zapi.hostgroup.get(filter={"name": group_name})
+        if grupos:
+            group_id = grupos[0]["groupid"]
+            log.info(f"  ℹ Host Group '{group_name}' ya existe (ID: {group_id})")
+        else:
+            resultado = zapi.hostgroup.create(name=group_name)
+            group_id = resultado["groupids"][0]
+            log.info(f"  ✓ Host Group '{group_name}' creado (ID: {group_id})")
+
+        # 2. Buscar template "ICMP Ping"
+        template_name = "ICMP Ping"
+        templates = zapi.template.get(filter={"host": template_name})
+        if not templates:
+            templates = zapi.template.get(search={"host": template_name})
+        
+        if templates:
+            template_id = templates[0]["templateid"]
+            log.info(f"  ℹ Template '{template_name}' encontrado (ID: {template_id})")
+        else:
+            log.warning(f"  ⚠ Template '{template_name}' no encontrado. Se continuará sin asociar template.")
+            template_id = None
+
+        # 3. Registrar o actualizar el Host "Router-R1-GNS3"
+        host_name = "Router-R1-GNS3"
+        hosts = zapi.host.get(filter={"host": host_name})
+        
+        # Ojo: la IP a monitorear debe ser PRIMARY_GATEWAY (10.0.1.2) para que el ping falle si el enlace principal cae!
+        monitor_ip = Config.PRIMARY_GATEWAY 
+        
+        interfaces = [
+            {
+                "type": 1,       # Agent (usado para ICMP ping simple sin agente real)
+                "main": 1,
+                "useip": 1,
+                "ip": monitor_ip,
+                "dns": "",
+                "port": "10050"
+            }
+        ]
+
+        if hosts:
+            host_id = hosts[0]["hostid"]
+            log.info(f"  ℹ Host '{host_name}' ya existe (ID: {host_id}). Verificando interfaz...")
+            # Actualizar la interfaz del host existente para asegurar que tiene la IP correcta
+            existing_interfaces = zapi.hostinterface.get(hostids=host_id)
+            if existing_interfaces:
+                interface_id = existing_interfaces[0]["interfaceid"]
+                if existing_interfaces[0]["ip"] != monitor_ip:
+                    zapi.hostinterface.update(
+                        interfaceid=interface_id,
+                        ip=monitor_ip
+                    )
+                    log.info(f"  ✓ Interfaz del host actualizada a IP: {monitor_ip}")
+                else:
+                    log.info(f"  ℹ Interfaz del host ya tiene la IP correcta: {monitor_ip}")
+        else:
+            host_params = {
+                "host": host_name,
+                "name": f"🌐 {host_name}",
+                "groups": [{"groupid": group_id}],
+                "interfaces": interfaces,
+                "description": "Router principal GNS3 - Monitoreo de failover automático"
+            }
+            if template_id:
+                host_params["templates"] = [{"templateid": template_id}]
+            
+            resultado = zapi.host.create(**host_params)
+            host_id = resultado["hostids"][0]
+            log.info(f"  ✓ Host '{host_name}' registrado automáticamente (ID: {host_id}, IP de monitoreo: {monitor_ip})")
+
+        # 4. Crear Acción de Failover
+        action_name = "Failover - ICMP Ping Failed"
+        acciones = zapi.action.get(filter={"name": action_name})
+        if acciones:
+            log.info(f"  ℹ Acción '{action_name}' ya existe (ID: {acciones[0]['actionid']})")
+        else:
+            zapi.action.create(
+                name=action_name,
+                eventsource=0,   # Triggers
+                status=0,        # Habilitada
+                esc_period="60s",
+                filter={
+                    "evaltype": 0,  # AND/OR
+                    "conditions": [
+                        {
+                            "conditiontype": 4,    # Trigger severity
+                            "operator": 5,         # >= 
+                            "value": "4"           # High
+                        },
+                        {
+                            "conditiontype": 2,    # Trigger name
+                            "operator": 2,         # Contains
+                            "value": "ICMP"
+                        }
+                    ]
+                },
+                operations=[
+                    {
+                        "operationtype": 0,  # Send message
+                        "opmessage": {
+                            "default_msg": 1,
+                            "mediatypeid": "0"
+                        },
+                        "opmessage_grp": [
+                            {"usrgrpid": "7"}   # Zabbix administrators
+                        ]
+                    }
+                ],
+                recovery_operations=[
+                    {
+                        "operationtype": 11,  # Send recovery message
+                        "opmessage": {
+                            "default_msg": 1,
+                            "mediatypeid": "0"
+                        }
+                    }
+                ]
+            )
+            log.info(f"  ✓ Acción '{action_name}' creada")
+
+        log.info("✓ Auto-configuración de Zabbix completada con éxito.")
+        return True
+    except Exception as e:
+        log.error(f"⚠ Error durante la auto-configuración de Zabbix: {e}", exc_info=True)
+        return False
 
 
 # ============================================================
@@ -324,13 +460,8 @@ def ejecutar_playbook(nombre: str) -> bool:
 # ============================================================
 #  Ciclo Principal de Monitoreo
 # ============================================================
-def monitorear(state: EngineState):
-    """Ciclo principal: consulta Zabbix y toma decisiones."""
-    zapi = conectar_zabbix()
-    if not zapi:
-        state.registrar_error()
-        return
-
+def monitorear(zapi: ZabbixAPI, state: EngineState):
+    """Ciclo principal: consulta Zabbix y toma decisiones utilizando la sesión persistente."""
     try:
         # Buscar triggers activos (value=1 = PROBLEM)
         triggers = zapi.trigger.get(
@@ -398,7 +529,8 @@ def monitorear(state: EngineState):
 
     except Exception as e:
         log.error(f"Error en ciclo de monitoreo: {e}", exc_info=True)
-        state.registrar_error()
+        # Lanzar la excepción para que el loop principal lo capture y decida si reconectar
+        raise e
 
 
 # ============================================================
@@ -419,7 +551,7 @@ def main():
     # Banner
     log.info("╔══════════════════════════════════════════════════════════╗")
     log.info("║       Motor de Automatización Failover — UAGRM         ║")
-    log.info("║       Failover + Failback Automático v2.0               ║")
+    log.info("║       Failover + Failback Automático v3.0 (Optimizado)   ║")
     log.info("╠══════════════════════════════════════════════════════════╣")
     log.info(f"║  Zabbix:    {Config.ZABBIX_URL:<44}║")
     log.info(f"║  Router:    {Config.ROUTER_IP:<44}║")
@@ -440,10 +572,31 @@ def main():
     # Iniciar healthcheck HTTP
     iniciar_healthcheck(state)
 
+    # Inicializar sesión Zabbix y bootstrap
+    zapi = None
+
     # Loop principal
     log.info(f"Iniciando monitoreo (cada {Config.POLL_INTERVAL}s)...")
     while running:
-        monitorear(state)
+        if not zapi:
+            zapi = conectar_zabbix()
+            if zapi:
+                bootstrap_zabbix(zapi)
+
+        if zapi:
+            try:
+                monitorear(zapi, state)
+            except Exception as e:
+                # Si ocurre un error de sesión/conexión, invalidar zapi para reconectar en el sig ciclo
+                err_msg = str(e).lower()
+                if "session" in err_msg or "connect" in err_msg or "auth" in err_msg or "http" in err_msg:
+                    log.warning("⚠ Error de comunicación con Zabbix API. Reestableciendo sesión para el próximo ciclo...")
+                    zapi = None
+                state.registrar_error()
+        else:
+            log.error("✗ Zabbix API no disponible — reintentando conexión en el próximo ciclo...")
+            state.registrar_error()
+
         time.sleep(Config.POLL_INTERVAL)
 
     log.info("Motor detenido correctamente")

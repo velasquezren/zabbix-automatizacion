@@ -208,63 +208,54 @@ Escribe `exit` para salir.
 
 ---
 
-## PASO 8 — Inyectar rutas en el contenedor Zabbix Server
+## PASO 8 — Inyectar rutas en el contenedor Zabbix Server (AUTOMATIZADO)
 
-Zabbix necesita saber cómo llegar a las redes `10.0.1.0/24` y `10.0.2.0/24` pasando por R1. Ejecuta esto en tu terminal Ubuntu:
+¡Buenas noticias! Este paso ha sido **completamente automatizado**. Hemos añadido un servicio ligero de inicialización llamado `zabbix-route-init` en `docker-compose.yml` que comparte el namespace de red de `zabbix-server`. Este se encarga de inyectar las rutas estáticas (`10.0.1.0/24` y `10.0.2.0/24`) a `zabbix-server` automáticamente al arrancar. Ya no tienes que instalar `iproute2` ni ejecutar comandos de Docker manualmente en cada reinicio.
 
+Si deseas verificar que las rutas se agregaron correctamente, puedes ver los logs del contenedor de inicialización:
 ```bash
-docker exec --user root zabbix-server bash -c \
-  "apt-get update -qq && apt-get install -y -qq iproute2 2>/dev/null && \
-   ip route add 10.0.1.0/24 via 10.50.0.100 && \
-   ip route add 10.0.2.0/24 via 10.50.0.100 && \
-   echo '✓ Rutas agregadas'"
+docker compose logs zabbix-route-init
 ```
-
-> [!CAUTION]
-> **Estas rutas se pierden si reinicias Docker.** Si haces `docker compose down/up`, debes ejecutar este comando otra vez.
+O bien ejecutar la verificación manual en el servidor Zabbix:
+```bash
+docker exec zabbix-server ip route
+```
 
 ---
 
-## PASO 9 — Crear el Host en Zabbix Web (MANUAL)
+## PASO 9 — Configuración de Zabbix (AUTOMATIZADO)
 
-1. Abre tu navegador: **http://localhost:8080**
-2. Login: **Admin** / **zabbix**
+¡Este paso también ha sido **completamente automatizado**! Ya no necesitas registrar manualmente el Host Group, el Host, asociar la plantilla `ICMP Ping`, ni crear la acción en la interfaz web de Zabbix.
 
-### 9.1 Crear Host Group
-- Ve a: `Data collection` → `Host groups` → `Create host group`
-- Nombre: **`GNS3 Routers`**
-- Click **Add**
-
-### 9.2 Crear el Host
-- Ve a: `Data collection` → `Hosts` → `Create host`
-- Rellena así:
-
-| Campo | Valor |
-|---|---|
-| **Host name** | `Router-R1-GNS3` |
-| **Templates** | Busca y selecciona: **`ICMP Ping`** |
-| **Host groups** | Selecciona: **`GNS3 Routers`** |
-| **Interfaces** | Click **Add** → elige **Agent** → IP: **`10.0.1.2`** → Port: `10050` |
-
-- Click **Add** para guardar el host.
+### ¿Cómo funciona la automatización?
+Cuando levantas la infraestructura con `docker compose up`, el contenedor `automation-engine` ejecutará `main.py`, el cual espera a que la API de Zabbix esté lista y realiza automáticamente lo siguiente:
+1. Crea el **Host Group** llamado `GNS3 Routers` (si no existía).
+2. Busca la plantilla oficial de Zabbix **`ICMP Ping`**.
+3. Registra el host **`Router-R1-GNS3`** asociándole la plantilla `ICMP Ping` y configurando su IP de monitoreo exactamente en **`10.0.1.2`** (el extremo de R2 a través del enlace principal). Si el host ya existía, actualiza su interfaz para asegurar que tiene esta IP correcta.
+4. Crea la **Acción de Failover** en Zabbix para alertar ante fallas de ICMP.
 
 > [!IMPORTANT]
-> **¿Por qué la IP es `10.0.1.2` y no `10.50.0.100`?**
+> **¿Por qué la IP de monitoreo es `10.0.1.2` y no `10.50.0.100`?**
 > Porque queremos que Zabbix le haga ping a R2 **a través del enlace principal**.
-> Si el enlace principal se cae, el ping a `10.0.1.2` fallará, Zabbix disparará la alarma, y tu motor de automatización ejecutará el failover.
-> Si pusieras `10.50.0.100`, Zabbix le haría ping a R1 por la interfaz de management que nunca se cae, y jamás detectaría la falla del enlace.
+> Si el enlace principal se cae, el ping a `10.0.1.2` fallará, Zabbix disparará la alarma, y tu motor de automatización detectará la alarma y ejecutará el failover.
+> Si usáramos `10.50.0.100` (IP de management), Zabbix le haría ping a R1 por la interfaz de management (que nunca se cae), y jamás se enteraría de la falla del enlace principal.
 
-### 9.3 Esperar
-- Ve a `Monitoring` → `Hosts`
-- Espera 2-3 minutos hasta que el indicador de disponibilidad se ponga **🟢 verde** (ICMP = verde)
-- Cuando esté verde, mira los logs del motor:
-
+### 9.1 Verificar en Zabbix Web o en los logs del motor
+1. Abre tu navegador: **http://localhost:8080**
+2. Inicia sesión: **Admin** / **zabbix**
+3. Ve a `Monitoring` → `Hosts` y verás que el host `🌐 Router-R1-GNS3` ya ha sido creado y está siendo monitoreado de forma automática.
+4. Si quieres ver el flujo de arranque del motor de automatización y la auto-configuración exitosa, mira sus logs:
 ```bash
 docker compose logs -f automation-engine
 ```
-
-Deberías ver:
+Deberías ver una salida limpia como esta:
 ```
+⚙ Iniciando auto-configuración de Zabbix...
+  ✓ Host Group 'GNS3 Routers' creado o ya existente
+  ✓ Host 'Router-R1-GNS3' registrado automáticamente (ID: 10084, IP de monitoreo: 10.0.1.2)
+  ✓ Acción 'Failover - ICMP Ping Failed' creada o ya existente
+✓ Auto-configuración de Zabbix completada con éxito.
+...
 ✓ Red estable — Monitoreando...
 ```
 
@@ -367,3 +358,37 @@ graph TD
 ```bash
 docker compose exec automation-engine python3 -c "import json; json.dump({'en_failover':False,'total_failovers':0,'total_failbacks':0,'last_failover_at':None,'last_failback_at':None,'last_check_at':None,'consecutive_errors':0,'engine_started_at':'now'}, open('/app/data/engine_state.json','w'))"
 ```
+
+
+docker compose exec automation-engine python3 -c "
+import json
+json.dump({
+  'en_failover': False,
+  'total_failovers': 0,
+  'total_failbacks': 0,
+  'last_failover_at': None,
+  'last_failback_at': None,
+  'last_check_at': None,
+  'consecutive_errors': 0,
+  'engine_started_at': 'now'
+}, open('/app/data/engine_state.json','w'))
+print('Estado reseteado')
+"
+
+
+
+
+
+docker exec --user root zabbix-server bash -c \
+  "ip route add 10.0.1.0/24 via 10.50.0.100 2>/dev/null; \
+   ip route add 10.0.2.0/24 via 10.50.0.100 2>/dev/null; \
+   echo '✓ Rutas listas'"
+   
+   
+   
+   
+   
+   
+   
+   docker exec zabbix-server ping 10.0.1.2 -c 3
+docker exec zabbix-server ping 10.0.2.2 -c 3

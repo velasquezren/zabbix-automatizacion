@@ -29,6 +29,7 @@ ZABBIX_PASSWORD = os.getenv("ZABBIX_PASSWORD", "zabbix")
 
 ROUTER_IP = os.getenv("ROUTER_IP", "10.50.0.100")
 ROUTER_NAME = os.getenv("ROUTER_NAME", "Router-R1-GNS3")
+PRIMARY_GATEWAY = os.getenv("PRIMARY_GATEWAY", "10.0.1.2")
 HOST_GROUP_NAME = "GNS3 Routers"
 ICMP_TEMPLATE = "ICMP Ping"  # Template incluido por defecto en Zabbix 7.0
 
@@ -91,22 +92,21 @@ def registrar_router(zapi: ZabbixAPI, group_id: str, template_id: str = None) ->
         print(f"  ℹ Host '{ROUTER_NAME}' ya existe (ID: {hid})")
         return hid
 
+    # Ojo: la IP a monitorear debe ser PRIMARY_GATEWAY (10.0.1.2) para que el ping falle si el enlace principal cae!
+    monitor_ip = PRIMARY_GATEWAY
+
     host_params = {
         "host": ROUTER_NAME,
         "name": f"🌐 {ROUTER_NAME}",
         "groups": [{"groupid": group_id}],
         "interfaces": [
             {
-                "type": 2,       # SNMP
+                "type": 1,       # Agent (usado para ICMP ping simple sin agente real)
                 "main": 1,       # Interfaz principal
                 "useip": 1,
-                "ip": ROUTER_IP,
+                "ip": monitor_ip,
                 "dns": "",
-                "port": "161",
-                "details": {
-                    "version": 2,        # SNMPv2c
-                    "community": "{$SNMP_COMMUNITY}"
-                }
+                "port": "10050"
             }
         ],
         "description": "Router principal GNS3 - Monitoreo de failover automático"
@@ -117,7 +117,7 @@ def registrar_router(zapi: ZabbixAPI, group_id: str, template_id: str = None) ->
 
     resultado = zapi.host.create(**host_params)
     hid = resultado["hostids"][0]
-    print(f"  ✓ Host '{ROUTER_NAME}' registrado (ID: {hid}, IP: {ROUTER_IP})")
+    print(f"  ✓ Host '{ROUTER_NAME}' registrado (ID: {hid}, IP de monitoreo: {monitor_ip})")
     return hid
 
 

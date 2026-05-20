@@ -63,6 +63,29 @@ services:
       start_period: 60s
 
   # ============================================================
+  #  Inicializador de Rutas para Zabbix Server (Automatizado)
+  # ============================================================
+  zabbix-route-init:
+    image: alpine:latest
+    container_name: zabbix-route-init
+    depends_on:
+      zabbix-server:
+        condition: service_started
+    network_mode: service:zabbix-server
+    cap_add:
+      - NET_ADMIN
+    restart: "no"
+    command: >
+      sh -c "
+      echo 'Esperando 5s para que la interfaz de red de zabbix-server esté lista...' &&
+      sleep 5 &&
+      ip route add 10.0.1.0/24 via 10.50.0.100 || true &&
+      ip route add 10.0.2.0/24 via 10.50.0.100 || true &&
+      echo '✓ Rutas estáticas agregadas automáticamente a zabbix-server:' &&
+      ip route
+      "
+
+  # ============================================================
   #  Interfaz Web de Zabbix (Frontend)
   # ============================================================
   zabbix-web:
