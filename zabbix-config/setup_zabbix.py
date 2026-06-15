@@ -146,7 +146,7 @@ def crear_accion_failover(zapi: ZabbixAPI):
                         "value": "4"           # High
                     },
                     {
-                        "conditiontype": 2,    # Trigger name
+                        "conditiontype": 3,    # Trigger name
                         "operator": 2,         # Contains
                         "value": "ICMP"
                     }
@@ -166,10 +166,9 @@ def crear_accion_failover(zapi: ZabbixAPI):
             ],
             recovery_operations=[
                 {
-                    "operationtype": 11,  # Send recovery message
+                    "operationtype": 11,  # Notify all involved (Send recovery message)
                     "opmessage": {
-                        "default_msg": 1,
-                        "mediatypeid": "0"
+                        "default_msg": 1
                     }
                 }
             ]

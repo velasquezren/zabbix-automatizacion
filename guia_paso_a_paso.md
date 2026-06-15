@@ -392,3 +392,7 @@ docker exec --user root zabbix-server bash -c \
    
    docker exec zabbix-server ping 10.0.1.2 -c 3
 docker exec zabbix-server ping 10.0.2.2 -c 3
+
+
+
+docker stop $(docker ps -q)
